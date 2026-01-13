@@ -708,17 +708,34 @@ def main():
             filtered = filter_items(items, kind_filter, status_filter, q)
             st.caption(f"Showing {len(filtered)} items")
 
+            # -----------------------------
+            # Selection + Item-specific prompting (optional)
+            # -----------------------------
+
+            # selection (must come BEFORE item-specific prompting so selected_keys exists)
+            selected_keys = st.multiselect(
+                "Select items to rewrite (by title)",
+                options=[item_key(it) for it in filtered],
+                format_func=lambda k: next((x.title for x in items if item_key(x) == k), k),
+                key="selected_keys_to_rewrite",
+            )
+
             # Item-specific prompting (optional)
             st.checkbox("Enable item-specific prompting", key="enable_item_prompts")
             if st.session_state.get("enable_item_prompts", False):
-                st.caption("Item-specific prompts are appended to the global instructions when rewriting each item.")
+                st.caption(
+                    "Item-specific prompts are appended to the global instructions when rewriting each item."
+                )
+
                 with st.expander("Item-specific prompts", expanded=False):
                     scope = st.radio(
                         "Edit prompts for",
                         options=["Selected items", "All visible items"],
                         horizontal=True,
                         help="Use Selected items to keep the list manageable.",
+                        key="item_prompt_scope",
                     )
+
                     item_prompts: Dict[str, str] = st.session_state.get("item_prompts", {}) or {}
 
                     if scope == "Selected items":
@@ -730,21 +747,31 @@ def main():
                         st.info("Select items first (or switch scope to All visible items).")
                     else:
                         colX, colY = st.columns(2)
+
+                        # Fill missing prompts with template (and force UI to reflect updates)
                         with colX:
                             if st.button("Fill missing prompts with template", key="fill_missing_prompts"):
                                 for k in keys_to_edit:
                                     it0 = next((x for x in items if item_key(x) == k), None)
                                     if it0 is None:
                                         continue
+
                                     if not (item_prompts.get(k) or "").strip():
                                         item_prompts[k] = default_item_prompt(it0)
+
+                                    # ensure widget shows updated value on next render
+                                    st.session_state[f"item_prompt__{k}"] = item_prompts[k]
+
                                 st.session_state["item_prompts"] = item_prompts
                                 st.success("Filled missing prompts.")
+
+                        # Clear prompts for this scope (and force UI to reflect updates)
                         with colY:
                             if st.button("Clear prompts for this scope", key="clear_scope_prompts"):
                                 for k in keys_to_edit:
-                                    if k in item_prompts:
-                                        item_prompts[k] = ""
+                                    item_prompts[k] = ""
+                                    st.session_state[f"item_prompt__{k}"] = ""
+
                                 st.session_state["item_prompts"] = item_prompts
                                 st.success("Cleared prompts.")
 
@@ -753,23 +780,36 @@ def main():
                         # Avoid rendering hundreds of textareas
                         max_edit = 30
                         if len(keys_to_edit) > max_edit:
-                            st.warning(f"Showing first {max_edit} prompts (out of {len(keys_to_edit)}). Use filters to narrow the list.")
+                            st.warning(
+                                f"Showing first {max_edit} prompts (out of {len(keys_to_edit)}). "
+                                "Use filters to narrow the list."
+                            )
+
                         for k in keys_to_edit[:max_edit]:
                             it0 = next((x for x in items if item_key(x) == k), None)
                             if it0 is None:
                                 continue
+
                             label = f"{it0.title}  ({it0.kind})"
-                            default_val = item_prompts.get(k)
-                            if default_val is None:
-                                default_val = default_item_prompt(it0)
-                                item_prompts[k] = default_val
+
+                            # Initialize prompt if absent
+                            if k not in item_prompts or item_prompts[k] is None:
+                                item_prompts[k] = default_item_prompt(it0)
+
+                            # Prefer widget state if it exists (keeps edits stable across reruns)
+                            widget_key = f"item_prompt__{k}"
+                            if widget_key in st.session_state:
+                                item_prompts[k] = st.session_state[widget_key]
+
                             item_prompts[k] = st.text_area(
                                 label,
-                                value=default_val,
+                                value=item_prompts[k],
                                 height=120,
-                                key=f"item_prompt__{k}",
+                                key=widget_key,
                             )
+
                         st.session_state["item_prompts"] = item_prompts
+
 
             # selection
             selected_keys = st.multiselect(
